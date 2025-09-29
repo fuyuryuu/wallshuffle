@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+
+################################################################################
+# simple GNOME/XFCE wallpaper switcher
+# picks a wallpaper at random from a specified folder
+# usage: wallshuffle /path/to/wallpaper/folder
+
+# hint:  set a cron job to execute this every hour for a slideshow:
+#          crontab -e
+#          0 * * * * /path/to/wallshuffle /path/to/wallpaper/folder
+################################################################################
+
+_error() # display message on-screen before exiting with an error
+  {
+	printf -- "ERROR: %s\n" "$1"
+	[[ $# -eq 2 ]] && printf -- "       %s\n" "$2"
+	exit 1
+  }
+
+_syntax_check() # make sure the correct arguments are passed / the folder exists
+  {
+	de="${XDG_SESSION_DESKTOP,,}"
+	[[ $de ]] || { de="${XDG_CURRENT_DESKTOP:-}" ; de="${de,,}" ; }
+	[[ $de ]] \
+		|| _error "Unable to determine DE"
+	selected_folder="$(realpath -- "$2" 2>/dev/null)"
+	[[ $1 -ge 1 ]] \
+		|| _error "Requires an argument"
+	[[ -d "$selected_folder" ]] \
+		|| _error "\"$selected_folder\" does not exist or is not a folder"
+	if [[ $de != gnome && $de != xfce ]] ; then
+		_error "DE \"$de\" is unsupported at this time"
+	fi
+  }
+
+_get_current_bg() # set $current_bg
+  {
+	if [[ $de == gnome ]] ; then
+		# make sure we target the appropriate wallpaper for dark / light mode
+		local desktop="gsettings get org.gnome.desktop"
+		[[ "$($desktop.interface color-scheme)" =~ dark ]] \
+			&& dark="-dark"
+		current_bg="$($desktop.background picture-uri$dark)"
+		# cut off 'file:// from beginning and ' from end
+		current_bg="${current_bg:8}" ; current_bg="${current_bg::-1}"
+	elif [[ $de == xfce ]] ; then
+		local limg="/backdrop/screen0/monitor0/last-image"
+		current_bg="$(xfconf-query -c xfce4-desktop -p $limg)"
+	fi
+  }
+
+_find_images_in() # populate $image_list with all images in selected folder
+  {
+	# enter selected folder
+	cd "$selected_folder" \
+		|| _error "Unable to cd into \"$selected_folder\""
+	# get list of folder contents as array
+	local folder_contents=(*)
+	# filter array to exclude directories & non-image files
+	readarray -t image_list < <(file -iNF/ "${folder_contents[@]}" | \
+								awk -F'/ image/' '{if(/\/ image\//) print $1}')
+	# enumerate images
+	num_images=${#image_list[@]}
+	[[ $num_images -gt 1 ]] \
+		|| _error "$num_images image(s) found in \"$selected_folder\"" \
+				  "Unable to set a wallpaper"
+  }
+
+_select_random_image() # select a random image from $image_list and set $new_bg
+  {
+	# loop until a) $new_bg is set, and
+	# b) is not the same as the current wallpaper
+	until [[ "$new_bg" && "$new_bg" != "$current_bg" ]] ; do
+		# get a random array number from 0 - number of images
+		local n=$((RANDOM % num_images))
+		# set $new_bg to the image associated with the random array number
+		new_bg="$selected_folder/${image_list[n]}"
+	done
+  }
+
+_set_new_bg()
+  {
+	if [[ $de == gnome ]] ; then
+		gsettings set org.gnome.desktop.background picture-uri$dark "file://$1"
+	elif [[ $de == xfce ]] ; then
+		xfce4-set-wallpaper "$1"
+	fi
+  }
+
+_syntax_check "$#" "$*"
+
+_get_current_bg
+
+_find_images_in "$selected_folder"
+
+_select_random_image
+
+_set_new_bg "$new_bg"
